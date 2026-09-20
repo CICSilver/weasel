@@ -44,7 +44,7 @@ STDMETHODIMP WeaselTSF::DoEditSession(TfEditCookie ec) {
         _StartComposition(_pEditSessionContext,
                           _fCUASWorkaroundEnabled && !config.inline_preedit);
       }
-      _InsertText(_pEditSessionContext, commit);
+      _InsertText(_pEditSessionContext, commit, caretBack);
       // Keep the candidate UI alive while the replacement composition is
       // being created; otherwise the key-down path destroys the old window
       // and the new one cannot be positioned until key-up.

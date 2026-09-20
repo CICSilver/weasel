@@ -325,10 +325,12 @@ class CInsertTextEditSession : public CEditSession {
   CInsertTextEditSession(com_ptr<WeaselTSF> pTextService,
                          com_ptr<ITfContext> pContext,
                          com_ptr<ITfComposition> pComposition,
-                         const std::wstring& text)
+                         const std::wstring& text,
+                         LONG caretBack)
       : CEditSession(pTextService, pContext),
         _text(text),
-        _pComposition(pComposition) {}
+        _pComposition(pComposition),
+        _caretBack(caretBack) {}
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
@@ -336,6 +338,9 @@ class CInsertTextEditSession : public CEditSession {
  private:
   std::wstring _text;
   com_ptr<ITfComposition> _pComposition;
+  /* How far back from the end of the committed text the caret belongs; 0
+     leaves it where it has always gone, just past the text. */
+  LONG _caretBack;
 };
 
 STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
@@ -354,6 +359,31 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
 
   /* update the selection to an insertion point just past the inserted text. */
   pRange->Collapse(ec, TF_ANCHOR_END);
+
+  if (_pTextService)
+    _pTextService->_SetPendingCaretAcp(-1);
+
+  if (_caretBack > 0) {
+    /* Record where the caret is meant to end up before moving it, so that
+       CMoveCaretEditSession can tell a store that kept the caret from one
+       that reset it. */
+    com_ptr<ITfRangeACP> pRangeACP;
+    LONG acp = 0, cch = 0;
+    if (_pTextService &&
+        SUCCEEDED(pRange->QueryInterface(
+            IID_ITfRangeACP, reinterpret_cast<void**>(&pRangeACP))) &&
+        SUCCEEDED(pRangeACP->GetExtent(&acp, &cch)))
+      _pTextService->_SetPendingCaretAcp(acp - _caretBack);
+
+    /* Some text stores only honour a caret placed inside the very edit
+       session that produced the text; ask for it here as well. The ones that
+       instead reset the caret when the composition ends are fixed up by
+       CMoveCaretEditSession afterwards. */
+    LONG moved = 0;
+    if (SUCCEEDED(pRange->ShiftStart(ec, -_caretBack, &moved, nullptr)) &&
+        moved == -_caretBack)
+      pRange->Collapse(ec, TF_ANCHOR_START);
+  }
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;
@@ -396,8 +426,26 @@ STDMETHODIMP CMoveCaretEditSession::DoEditSession(TfEditCookie ec) {
   com_ptr<ITfRange> pRange;
   pRange.Attach(tfSelection.range);
 
-  LONG cch = 0;
-  if (FAILED(pRange->ShiftStart(ec, -_back, &cch, nullptr)) || cch != -_back)
+  const LONG targetAcp =
+      _pTextService ? _pTextService->_TakePendingCaretAcp() : -1;
+
+  /* Without character positions there is nothing to compare against, so walk
+     the caret back from wherever the commit left it. */
+  LONG shift = -_back;
+
+  com_ptr<ITfRangeACP> pRangeACP;
+  LONG acp = 0, cch = 0;
+  if (targetAcp >= 0 &&
+      SUCCEEDED(pRange->QueryInterface(IID_ITfRangeACP,
+                                       reinterpret_cast<void**>(&pRangeACP))) &&
+      SUCCEEDED(pRangeACP->GetExtent(&acp, &cch))) {
+    shift = targetAcp - acp;
+    if (shift == 0)
+      return S_OK; /* the commit session's caret survived */
+  }
+
+  LONG moved = 0;
+  if (FAILED(pRange->ShiftStart(ec, shift, &moved, nullptr)) || moved != shift)
     return S_OK; /* not enough room; leave the caret where it is */
 
   pRange->Collapse(ec, TF_ANCHOR_START);
@@ -426,12 +474,13 @@ BOOL WeaselTSF::_MoveCaretBack(com_ptr<ITfContext> pContext, LONG back) {
 }
 
 BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
-                            const std::wstring& text) {
+                            const std::wstring& text,
+                            LONG caretBack) {
   CInsertTextEditSession* pEditSession;
   HRESULT hr;
 
   if ((pEditSession = new CInsertTextEditSession(this, pContext, _pComposition,
-                                                 text)) != NULL) {
+                                                 text, caretBack)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,
                                  TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
     pEditSession->Release();

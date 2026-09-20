@@ -149,6 +149,17 @@ class WeaselTSF : public ITfTextInputProcessorEx,
                                         ITfRange* pRangeComposition);
   BOOL _InitDisplayAttributeGuidAtom();
 
+  /* Where a commit that carried a caret anchor wants the insertion point,
+     as a character position, or -1 when nothing is pending. The commit edit
+     session records it so the follow-up session can tell a caret that already
+     moved from one the text store reset. */
+  void _SetPendingCaretAcp(LONG acp) { _pendingCaretAcp = acp; }
+  LONG _TakePendingCaretAcp() {
+    const LONG acp = _pendingCaretAcp;
+    _pendingCaretAcp = -1;
+    return acp;
+  }
+
   com_ptr<ITfThreadMgr> _GetThreadMgr() { return _pThreadMgr; }
   void HandleUICallback(size_t* const sel,
                         size_t* const hov,
@@ -183,7 +194,9 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _ShowLanguageBar(BOOL show);
   void _EnableLanguageBar(BOOL enable);
 
-  BOOL _InsertText(com_ptr<ITfContext> pContext, const std::wstring& ext);
+  BOOL _InsertText(com_ptr<ITfContext> pContext,
+                   const std::wstring& ext,
+                   LONG caretBack = 0);
   BOOL _MoveCaretBack(com_ptr<ITfContext> pContext, LONG back);
 
   void _DeleteCandidateList();
@@ -237,4 +250,5 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   BOOL _async_edit = false;
   BOOL _committed = false;
   BOOL _isToOpenClose = false;
+  LONG _pendingCaretAcp = -1;
 };

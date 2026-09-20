@@ -328,7 +328,17 @@ class CInsertTextEditSession : public CEditSession {
                          const std::wstring& text)
       : CEditSession(pTextService, pContext),
         _text(text),
-        _pComposition(pComposition) {}
+        _pComposition(pComposition) {
+    /* The first caret anchor decides where the insertion point lands;
+       every anchor is stripped so none reaches the document. */
+    for (size_t pos = _text.find(WEASEL_CARET_ANCHOR);
+         pos != std::wstring::npos;
+         pos = _text.find(WEASEL_CARET_ANCHOR, pos)) {
+      if (_caretOffset < 0)
+        _caretOffset = static_cast<LONG>(pos);
+      _text.erase(pos, 1);
+    }
+  }
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
@@ -336,6 +346,9 @@ class CInsertTextEditSession : public CEditSession {
  private:
   std::wstring _text;
   com_ptr<ITfComposition> _pComposition;
+  /* Offset into _text where the caret should land, or -1 to keep the
+     default of an insertion point just past the committed text. */
+  LONG _caretOffset = -1;
 };
 
 STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
@@ -354,6 +367,14 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
 
   /* update the selection to an insertion point just past the inserted text. */
   pRange->Collapse(ec, TF_ANCHOR_END);
+
+  /* a caret anchor walks that insertion point back into the text. */
+  if (_caretOffset >= 0) {
+    const LONG shift = static_cast<LONG>(_text.length()) - _caretOffset;
+    LONG cch = 0;
+    if (shift > 0 && SUCCEEDED(pRange->ShiftStart(ec, -shift, &cch, nullptr)))
+      pRange->Collapse(ec, TF_ANCHOR_START);
+  }
 
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;

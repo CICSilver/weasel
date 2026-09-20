@@ -19,6 +19,22 @@ STDMETHODIMP WeaselTSF::DoEditSession(TfEditCookie ec) {
   if (ok) {
     compositionEnded = false;
     if (!commit.empty()) {
+      /* A caret anchor in the commit string asks for the insertion point to
+         land inside the committed text instead of after it. Strip every
+         anchor so none reaches the document, and remember how far back the
+         caret has to travel from the end. */
+      size_t anchor = std::wstring::npos;
+      for (size_t pos = commit.find(WEASEL_CARET_ANCHOR);
+           pos != std::wstring::npos;
+           pos = commit.find(WEASEL_CARET_ANCHOR, pos)) {
+        if (anchor == std::wstring::npos)
+          anchor = pos;
+        commit.erase(pos, 1);
+      }
+      const LONG caretBack = (anchor == std::wstring::npos)
+                                 ? 0
+                                 : static_cast<LONG>(commit.length() - anchor);
+
       // For auto-selecting, commit and preedit can both exist.
       // Commit the old TSF composition. If Rime immediately has a new
       // preedit (top-word input), _EndComposition() drops the local pointer
@@ -33,6 +49,11 @@ STDMETHODIMP WeaselTSF::DoEditSession(TfEditCookie ec) {
       // being created; otherwise the key-down path destroys the old window
       // and the new one cannot be positioned until key-up.
       _EndComposition(_pEditSessionContext, false, !_status.composing);
+      /* Ending the composition can move the insertion point back to the end
+         of the committed text, so the caret is placed in its own edit session
+         queued after that one. */
+      if (caretBack > 0)
+        _MoveCaretBack(_pEditSessionContext, caretBack);
       compositionEnded = true;
       _committed = TRUE;
     } else {

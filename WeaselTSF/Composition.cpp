@@ -328,17 +328,7 @@ class CInsertTextEditSession : public CEditSession {
                          const std::wstring& text)
       : CEditSession(pTextService, pContext),
         _text(text),
-        _pComposition(pComposition) {
-    /* The first caret anchor decides where the insertion point lands;
-       every anchor is stripped so none reaches the document. */
-    for (size_t pos = _text.find(WEASEL_CARET_ANCHOR);
-         pos != std::wstring::npos;
-         pos = _text.find(WEASEL_CARET_ANCHOR, pos)) {
-      if (_caretOffset < 0)
-        _caretOffset = static_cast<LONG>(pos);
-      _text.erase(pos, 1);
-    }
-  }
+        _pComposition(pComposition) {}
 
   /* ITfEditSession */
   STDMETHODIMP DoEditSession(TfEditCookie ec);
@@ -346,9 +336,6 @@ class CInsertTextEditSession : public CEditSession {
  private:
   std::wstring _text;
   com_ptr<ITfComposition> _pComposition;
-  /* Offset into _text where the caret should land, or -1 to keep the
-     default of an insertion point just past the committed text. */
-  LONG _caretOffset = -1;
 };
 
 STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
@@ -368,14 +355,6 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   /* update the selection to an insertion point just past the inserted text. */
   pRange->Collapse(ec, TF_ANCHOR_END);
 
-  /* a caret anchor walks that insertion point back into the text. */
-  if (_caretOffset >= 0) {
-    const LONG shift = static_cast<LONG>(_text.length()) - _caretOffset;
-    LONG cch = 0;
-    if (shift > 0 && SUCCEEDED(pRange->ShiftStart(ec, -shift, &cch, nullptr)))
-      pRange->Collapse(ec, TF_ANCHOR_START);
-  }
-
   tfSelection.range = pRange;
   tfSelection.style.ase = TF_AE_NONE;
   tfSelection.style.fInterimChar = FALSE;
@@ -383,6 +362,67 @@ STDMETHODIMP CInsertTextEditSession::DoEditSession(TfEditCookie ec) {
   _pContext->SetSelection(ec, 1, &tfSelection);
 
   return hRet;
+}
+
+/* Move the caret back into the text that was just committed.
+
+   Ending a composition can leave the insertion point at the end of the
+   committed text even when the selection was set while the composition was
+   still alive, so this runs in its own edit session queued afterwards and
+   walks the current insertion point backwards instead. */
+class CMoveCaretEditSession : public CEditSession {
+ public:
+  CMoveCaretEditSession(com_ptr<WeaselTSF> pTextService,
+                        com_ptr<ITfContext> pContext,
+                        LONG back)
+      : CEditSession(pTextService, pContext), _back(back) {}
+
+  /* ITfEditSession */
+  STDMETHODIMP DoEditSession(TfEditCookie ec);
+
+ private:
+  LONG _back;
+};
+
+STDMETHODIMP CMoveCaretEditSession::DoEditSession(TfEditCookie ec) {
+  TF_SELECTION tfSelection;
+  ULONG fetched = 0;
+
+  if (FAILED(_pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &tfSelection,
+                                     &fetched)) ||
+      fetched == 0)
+    return E_FAIL;
+
+  com_ptr<ITfRange> pRange;
+  pRange.Attach(tfSelection.range);
+
+  LONG cch = 0;
+  if (FAILED(pRange->ShiftStart(ec, -_back, &cch, nullptr)) || cch != -_back)
+    return S_OK; /* not enough room; leave the caret where it is */
+
+  pRange->Collapse(ec, TF_ANCHOR_START);
+
+  tfSelection.range = pRange;
+  tfSelection.style.ase = TF_AE_NONE;
+  tfSelection.style.fInterimChar = FALSE;
+
+  _pContext->SetSelection(ec, 1, &tfSelection);
+
+  return S_OK;
+}
+
+BOOL WeaselTSF::_MoveCaretBack(com_ptr<ITfContext> pContext, LONG back) {
+  CMoveCaretEditSession* pEditSession;
+  HRESULT hr;
+
+  if ((pEditSession = new CMoveCaretEditSession(this, pContext, back)) !=
+      NULL) {
+    pContext->RequestEditSession(_tfClientId, pEditSession,
+                                 TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    pEditSession->Release();
+  }
+
+  return TRUE;
 }
 
 BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,

@@ -184,6 +184,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _EnableLanguageBar(BOOL enable);
 
   BOOL _InsertText(com_ptr<ITfContext> pContext, const std::wstring& ext);
+  BOOL _MoveCaretBack(com_ptr<ITfContext> pContext, LONG back);
 
   void _DeleteCandidateList();
 
